@@ -11,7 +11,7 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 
 class FreePornVideos : MainAPI() {
     override var mainUrl              = "https://www.freepornvideos.xxx"
-    override var name                 = "Free Porn Videos"
+    override var name                 = "Free Porn Videos+"
     override val hasMainPage          = true
     override var lang                 = "en"
     override val hasQuickSearch       = false
