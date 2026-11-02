@@ -67,11 +67,15 @@ class FreePornVideos : MainAPI() {
 
     // ---------------------------------------------------------------- constantes / helpers
 
-    // Qualquer página de listagem de vídeos (atriz, categoria, canal, rede) usa div.item com a.thumb_title
-    private val seletorListagem = "div.item:has(a.thumb_title)"
+    // Qualquer página de listagem de vídeos (atriz, categoria, canal, rede) usa div.item.
+    // Nem todo div.item é vídeo (tem o cabeçalho da atriz e anúncios): toSearchResult() devolve null pra esses.
+    private val seletorListagem = "div.item"
 
     // Páginas de listagem de entidades (atrizes, sites): /models/, /sites/ ...
-    private val raizesEntidades = setOf("models", "models/top-rated", "sites")
+    private val raizesEntidades = setOf(
+        "models", "models/top-rated", "models/title",
+        "sites", "sites/top-rated", "sites/total-videos", "sites/title-az", "sites/title-za"
+    )
     private val regexEntidade = Regex("""/(models|sites|networks)/[^/?]+/?$""")
 
     // Quantas páginas de uma atriz/site/categoria viram "episódios" ao abrir o card
@@ -110,8 +114,10 @@ class FreePornVideos : MainAPI() {
 
     private fun posterDe(el: Element, seletor: String): String? {
         for (img in el.select(seletor)) {
-            val src = img.attr("data-src").takeIf { it.isNotBlank() }
-                ?: img.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:") }
+            // O site usa lazy-load: no HTML cru o src é um gif base64 e a imagem real fica em data-original
+            val src = listOf("data-original", "data-src", "data-lazy-src", "src")
+                .map { img.attr(it) }
+                .firstOrNull { it.isNotBlank() && !it.startsWith("data:") }
             if (src != null) return fixUrlNull(src)
         }
         return null
@@ -121,12 +127,19 @@ class FreePornVideos : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
         try {
-            if (selectFirst("div.img iframe") != null) return null // anúncio
+            if (selectFirst("iframe") != null) return null // anúncio
 
-            val linkElement = selectFirst("a.thumb_title") ?: return null
-            val href = linkElement.attr("href").takeIf { it.isNotBlank() } ?: return null
-            val title = linkElement.selectFirst("strong.title")?.text()?.takeIf { it.isNotBlank() } ?: return null
-            val poster = posterDe(this, "img.thumb") ?: return null
+            // Listagens normais: a.thumb_title. A página /sites/ (vídeos de amostra) não tem essa classe,
+            // então cai pro primeiro link que aponta pra /videos/.
+            val linkElement = selectFirst("a.thumb_title")
+                ?: select("a[href]").firstOrNull { it.attr("href").contains("/videos/") }
+                ?: return null
+            val href = fixUrlNull(linkElement.attr("href")?.takeIf { it.isNotBlank() }) ?: return null
+            val title = linkElement.selectFirst("strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: selectFirst("div.item-info strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                ?: linkElement.attr("title").trim().takeIf { it.isNotBlank() }
+                ?: return null
+            val poster = posterDe(this, "img.thumb") ?: posterDe(this, "img") ?: return null
 
             // "100%" -> 0..10
             val nota = selectFirst("div.rating")?.text()?.filter { it.isDigit() }?.toIntOrNull()
@@ -169,6 +182,39 @@ class FreePornVideos : MainAPI() {
         }.distinctBy { it.url }
     }
 
+    // A página /sites/ NÃO é uma grade de cards: cada site é uma seção
+    //   <div class="headline"><h2>Nome</h2><a class="more" href=".../sites/slug/"><span>See All 60 Videos</span></a></div>
+    //   <div class="box"> ...4 vídeos de amostra... </div>
+    // O nome vem do h2, o total do "See All N Videos" e a foto é a capa do primeiro vídeo de amostra.
+    private fun Document.toSitesAgrupados(): List<SearchResponse> {
+        return select("a.more[href]").mapNotNull { mais ->
+            try {
+                val href = fixUrlNull(mais.attr("href")) ?: return@mapNotNull null
+                if (!regexEntidade.containsMatchIn(href)) return@mapNotNull null
+
+                val cabecalho = mais.parent() ?: return@mapNotNull null
+                val nome = cabecalho.selectFirst("h2, h3")?.text()?.trim()?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val total = mais.text().filter { it.isDigit() }.takeIf { it.isNotBlank() }
+                val poster = cabecalho.nextElementSibling()
+                    ?.let { posterDe(it, "img.thumb") ?: posterDe(it, "img") }
+
+                newMovieSearchResponse(if (total != null) "$nome ($total)" else nome, href, TvType.NSFW) {
+                    this.posterUrl = poster
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d("FPV", "Error in toSitesAgrupados: ${e.message}")
+                null
+            }
+        }.distinctBy { it.url }
+    }
+
+    // Lista de atrizes (cards a.item) ou de sites (seções); tenta uma e cai pra outra
+    private fun Document.toListaEntidades(): List<SearchResponse> =
+        toEntidades().ifEmpty { toSitesAgrupados() }
+
     private suspend fun buscaLista(url: String, seletor: String): Pagina {
         return try {
             val doc = limiteRequisicoes.withPermit { app.get(url).document }
@@ -186,6 +232,8 @@ class FreePornVideos : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val caminho = request.data.removePrefix(mainUrl).trim('/')
         val ehEntidade = caminho in raizesEntidades
+        // Diagnóstico: no logcat dá pra ver se o Kototoro pede todas as seções de uma vez ou só a do chip
+        Log.d("FPV", "getMainPage '${request.name}' página $page")
 
         val document = try {
             limiteRequisicoes.withPermit { app.get("${request.data}/$page/").document }
@@ -201,14 +249,14 @@ class FreePornVideos : MainAPI() {
             )
         }
 
-        val home = if (ehEntidade) document.toEntidades()
-        else document.select(seletorListagem).mapNotNull { it.toSearchResult() }
+        val home = if (ehEntidade) document.toListaEntidades()
+        else document.select(seletorListagem).mapNotNull { it.toSearchResult() }.distinctBy { it.url }
 
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
                 list = home,
-                isHorizontalImages = !ehEntidade // fotos de atrizes ficam melhores na vertical
+                isHorizontalImages = !ehEntidade || caminho.startsWith("sites") // fotos de atrizes ficam melhores na vertical; capas de sites são vídeos (horizontais)
             ),
             hasNext = home.isNotEmpty() && document.temProxima()
         )

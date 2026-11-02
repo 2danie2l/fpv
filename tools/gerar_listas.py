@@ -26,7 +26,11 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 DESTINO = os.path.join("FreePornVideos", "src", "main", "kotlin",
                        "com", "kerimmkirac", "Listas.kt")
 IGNORAR_SLUGS = {"top-rated", "title", "total-videos", "most-popular",
-                 "latest-updates", "most-viewed"}
+                 "latest-updates", "most-viewed", "title-az", "title-za"}
+# Página /sites/: cada site é uma seção <div class="headline"><h2>Nome</h2><a class="more" href=".../sites/slug/">
+SECAO_RE = re.compile(
+    r'<h[23][^>]*>([^<]*)</h[23]>\s*<a\b[^>]*class="[^"]*\bmore\b[^"]*"[^>]*href="([^"]+)"', re.S | re.I)
+NOME_LIXO = re.compile(r"^(see all|view all|more|all videos)\b", re.I)
 A_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.S | re.I)
 
 
@@ -61,6 +65,16 @@ def extrair(pagina, tipos):
     """Retorna lista de (caminho, nome), ex.: ('models/abella-danger', 'Abella Danger')."""
     regex = re.compile(r"^https?://[^/]+/(%s)/([^/?#]+)/?$" % "|".join(tipos))
     achados = {}
+    # 1) Seções da página /sites/ (o nome verdadeiro está no h2, o link "See All N Videos" não serve de nome)
+    for h2, href in SECAO_RE.findall(pagina):
+        m = regex.match(html.unescape(href).strip())
+        if not m:
+            continue
+        tipo, slug = m.groups()
+        nome = _texto(h2).replace("|", "/").strip()
+        if nome and slug not in IGNORAR_SLUGS:
+            achados[f"{tipo}/{slug}"] = nome
+    # 2) Demais links (cards de atrizes, barra lateral, lista de categorias...)
     for attrs, interno in A_RE.findall(pagina):
         m = regex.match(_atributo(attrs, "href"))
         if not m:
@@ -79,10 +93,10 @@ def extrair(pagina, tipos):
             alt = re.search(r'alt="([^"]*)"', interno)
             nome = html.unescape(alt.group(1)).strip() if alt else ""
         nome = re.sub(r"\s*\(\d+\)\s*$", "", nome).replace("|", "/").strip()
-        if not nome or nome.lower() in ("view all", "more"):
+        if not nome or NOME_LIXO.match(nome):
             continue
         chave = f"{tipo}/{slug}"
-        if chave not in achados or len(nome) > len(achados[chave]):
+        if chave not in achados:  # o nome vindo do h2 da seção tem prioridade
             achados[chave] = nome
     return list(achados.items())
 
