@@ -11,6 +11,8 @@ import org.jsoup.nodes.Element
 import java.text.Normalizer
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class FreePornVideos : MainAPI() {
     override var mainUrl              = "https://www.freepornvideos.xxx"
@@ -20,32 +22,44 @@ class FreePornVideos : MainAPI() {
     override val hasQuickSearch       = false
     override val supportedTypes       = setOf(TvType.NSFW)
 
-    // Cada entrada vira uma seção da home e um chip de filtro no Kototoro.
-    // As listas de tags / estúdios / atrizes ficam em Listas.kt (gerado por tools/gerar_listas.py).
+    // Cada entrada vira uma seção da home E um chip de filtro no Kototoro.
+    // IMPORTANTE: sem nenhum chip selecionado o Kototoro carrega as seções da home, então
+    // esta lista precisa ficar pequena. Tudo que não está aqui continua acessível pela busca
+    // (ver "Busca com filtros" abaixo) e pelas listas "Pornstars" e "Sites".
+    private val tagsPopulares = listOf(
+        "milf", "big-tits", "big-ass", "blowjob", "anal", "lesbian", "threesome", "latina",
+        "asian", "ebony", "mature", "creampie", "pov", "jav-uncensored", "amateur", "hardcore",
+        "massage", "cosplay", "interracial", "blonde", "brunette", "redhead", "big-cock", "stepmom"
+    )
+    private val estudiosPrincipais = listOf(
+        "networks/brazzers-com", "networks/mylf-com", "networks/blacked", "networks/teamskeet-com",
+        "networks/bangbros", "networks/nubiles-porn-com", "networks/adult-time", "networks/tushy-com",
+        "networks/private", "networks/woodman-casting", "networks/naughtyamerica-com",
+        "networks/mom-lover", "networks/rk-com", "networks/mofos-com"
+    )
+
     private fun entradasDaHome(): Array<Pair<String, String>> {
         val fixas = listOf(
             "$mainUrl/latest-updates" to "All Videos",
             "$mainUrl/most-popular/week" to "Most Popular",
-
-            // Listas de entidades (atrizes / sites): paginadas ao vivo pelo site
             "$mainUrl/models" to "Pornstars - Most Viewed",
             "$mainUrl/models/top-rated" to "Pornstars - Top Rated",
             "$mainUrl/sites" to "Sites"
         )
 
-        fun converte(linhas: List<String>, caminho: (String) -> String, rotulo: (String) -> String) =
-            linhas.mapNotNull { linha ->
-                val partes = linha.split("|", limit = 2)
-                if (partes.size < 2) null else "$mainUrl/${caminho(partes[0])}" to rotulo(partes[1])
-            }
+        val nomesTags = Listas.tags.mapNotNull { par(it) }.toMap()
+        val nomesEstudios = Listas.estudios.mapNotNull { par(it) }.toMap()
 
-        val tags = converte(Listas.tags, { "categories/$it" }, { it })
-        val estudios = converte(Listas.estudios, { it }, { "Studio: $it" })
-        val atrizes = converte(Listas.atrizes, { "models/$it" }, { "Pornstar: $it" })
+        val tags = tagsPopulares.map { slug ->
+            "$mainUrl/categories/$slug" to "Tag: ${nomesTags[slug] ?: slug.replace('-', ' ')}"
+        }
+        val estudios = estudiosPrincipais.map { caminho ->
+            "$mainUrl/$caminho" to "Studio: ${nomesEstudios[caminho] ?: caminho.substringAfter('/').replace('-', ' ')}"
+        }
 
-        return (fixas + tags + estudios + atrizes)
-            .distinctBy { it.first }   // mesma URL só uma vez
-            .distinctBy { it.second }  // mesmo nome de chip só uma vez
+        return (fixas + tags + estudios)
+            .distinctBy { it.first }
+            .distinctBy { it.second }
             .toTypedArray()
     }
 
@@ -64,6 +78,16 @@ class FreePornVideos : MainAPI() {
     private val maxPaginasColecao = 5
 
     private class Pagina(val itens: List<SearchResponse>, val temProxima: Boolean)
+
+    // "slug|Nome" (formato do Listas.kt) -> Pair(slug, Nome)
+    private fun par(linha: String): Pair<String, String>? {
+        val p = linha.split("|", limit = 2)
+        return if (p.size == 2) p[0] to p[1] else null
+    }
+
+    // Se o app pedir várias seções ao mesmo tempo, só 3 requisições vão ao site por vez
+    // (evita "Software caused connection abort" por excesso de conexões simultâneas)
+    private val limiteRequisicoes = Semaphore(3)
     private class FonteVideo(val url: String, val label: String)
 
     // Fontes de vídeo já lidas no load(), pra loadLinks não baixar a página de novo (validade curta: os links expiram)
@@ -147,7 +171,7 @@ class FreePornVideos : MainAPI() {
 
     private suspend fun buscaLista(url: String, seletor: String): Pagina {
         return try {
-            val doc = app.get(url).document
+            val doc = limiteRequisicoes.withPermit { app.get(url).document }
             Pagina(doc.select(seletor).mapNotNull { it.toSearchResult() }, doc.temProxima())
         } catch (e: CancellationException) {
             throw e
@@ -164,7 +188,7 @@ class FreePornVideos : MainAPI() {
         val ehEntidade = caminho in raizesEntidades
 
         val document = try {
-            app.get("${request.data}/$page/").document
+            limiteRequisicoes.withPermit { app.get("${request.data}/$page/").document }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -192,9 +216,69 @@ class FreePornVideos : MainAPI() {
 
     // ---------------------------------------------------------------- busca
 
+    // ---- Busca com filtros: "tag: milf", "studio: brazzers", "atriz: abella danger"
+    private enum class TipoFiltro { TAG, ESTUDIO, ATRIZ }
+
+    private val regexFiltro = Regex(
+        """^\s*(tags?|categoria|categorias|studio|estudio|estúdio|site|rede|network|atriz|pornstar|model)\s*:\s*(.+)$""",
+        RegexOption.IGNORE_CASE
+    )
+
+    private fun String.normalizado(): String =
+        Normalizer.normalize(this, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
+            .lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
+
+    private fun parseFiltro(query: String): Pair<TipoFiltro, String>? {
+        val m = regexFiltro.find(query) ?: return null
+        val tipo = when (m.groupValues[1].lowercase()) {
+            "tag", "tags", "categoria", "categorias" -> TipoFiltro.TAG
+            "atriz", "pornstar", "model" -> TipoFiltro.ATRIZ
+            else -> TipoFiltro.ESTUDIO
+        }
+        return tipo to m.groupValues[2].trim()
+    }
+
+    // Procura o termo nas listas completas (Listas.kt) e devolve até 3 caminhos ("models/x", "networks/y"...)
+    private fun candidatos(tipo: TipoFiltro, termo: String): List<String> {
+        val alvo = termo.normalizado()
+        val base: List<Pair<String, String>> = when (tipo) {
+            TipoFiltro.TAG -> Listas.tags.mapNotNull { par(it) }.map { "categories/${it.first}" to it.second }
+            TipoFiltro.ESTUDIO -> Listas.estudios.mapNotNull { par(it) }
+            TipoFiltro.ATRIZ -> Listas.atrizes.mapNotNull { par(it) }.map { "models/${it.first}" to it.second }
+        }
+        val achados = base
+            .filter { it.second.normalizado().contains(alvo) }
+            .sortedBy {
+                val n = it.second.normalizado()
+                when { n == alvo -> 0; n.startsWith(alvo) -> 1; else -> 2 }
+            }
+            .take(3)
+            .map { it.first }
+        if (achados.isNotEmpty()) return achados
+
+        // Não está nas listas: tenta o texto como slug direto no site
+        val slug = termo.createSlug() ?: return emptyList()
+        return when (tipo) {
+            TipoFiltro.TAG -> listOf("categories/$slug")
+            TipoFiltro.ESTUDIO -> listOf("networks/$slug", "sites/$slug")
+            TipoFiltro.ATRIZ -> listOf("models/$slug")
+        }
+    }
+
     override suspend fun search(query: String, page: Int): SearchResponseList {
-        val searchquery = query.createSlug() ?: ""
         val pagina = if (page < 1) 1 else page
+
+        parseFiltro(query)?.let { (tipo, termo) ->
+            val paginas = candidatos(tipo, termo).amap { caminho ->
+                buscaLista("$mainUrl/$caminho/$pagina/", seletorListagem)
+            }
+            return newSearchResponseList(
+                paginas.flatMap { it.itens }.distinctBy { it.url },
+                hasNext = paginas.any { it.temProxima }
+            )
+        }
+
+        val searchquery = query.createSlug() ?: ""
 
         // 1) Texto igual ao nome de atriz/categoria/canal/rede -> vídeos dela(e).
         //    Na 1ª página testa os 4 tipos; nas seguintes só os que existiam de verdade.

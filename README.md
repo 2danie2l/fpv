@@ -12,14 +12,19 @@ Adicione este repositório no app:
 
 ## Recursos
 
-- Home com ordenações, atrizes (Pornstars), sites, redes e categorias populares
-- Busca por título, atriz, categoria, canal ou rede (qualquer categoria funciona pela busca)
+- Chips de filtro: tags populares (`Tag: ...`) e principais redes (`Studio: ...`), mais as listas Pornstars e Sites
+- Busca com filtros (digite na busca):
+  - `tag: milf`
+  - `studio: brazzers`
+  - `atriz: abella danger`
+  - Aceita nome parcial (procura nas listas do `Listas.kt`)
+- Busca normal por título, atriz, categoria, canal ou rede
 - Abrir atriz/site/rede lista os vídeos (primeiras 5 páginas)
 - Todas as qualidades disponíveis (2160p/720p/480p...)
 
 Baseado na extensão FreePornVideos de @kerimmkirac.
 
-## Atualizar as listas de filtro (tags, estúdios, atrizes)
+## Atualizar as listas usadas na busca com filtros (tags, estúdios, atrizes)
 
 Na raiz do repositório, com Python 3 instalado:
 
