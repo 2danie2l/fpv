@@ -20,41 +20,36 @@ class FreePornVideos : MainAPI() {
     override val hasQuickSearch       = false
     override val supportedTypes       = setOf(TvType.NSFW)
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/latest-updates" to "All Videos",
-        "$mainUrl/most-popular/week" to "Most Popular",
+    // Cada entrada vira uma seção da home e um chip de filtro no Kototoro.
+    // As listas de tags / estúdios / atrizes ficam em Listas.kt (gerado por tools/gerar_listas.py).
+    private fun entradasDaHome(): Array<Pair<String, String>> {
+        val fixas = listOf(
+            "$mainUrl/latest-updates" to "All Videos",
+            "$mainUrl/most-popular/week" to "Most Popular",
 
-        // Listas de entidades (atrizes / sites): paginadas ao vivo pelo site, não ficam fixas no código
-        "$mainUrl/models" to "Pornstars - Most Viewed",
-        "$mainUrl/models/top-rated" to "Pornstars - Top Rated",
-        "$mainUrl/sites" to "Sites",
+            // Listas de entidades (atrizes / sites): paginadas ao vivo pelo site
+            "$mainUrl/models" to "Pornstars - Most Viewed",
+            "$mainUrl/models/top-rated" to "Pornstars - Top Rated",
+            "$mainUrl/sites" to "Sites"
+        )
 
-        "$mainUrl/networks/mom-lover" to "Mom Lover",
-        "$mainUrl/networks/brazzers-com" to "Brazzers",
-        "$mainUrl/networks/mylf-com" to "MYLF",
-        "$mainUrl/networks/adult-time" to "Adult Time",
-        "$mainUrl/networks/rk-com" to "Reality Kings",
-        "$mainUrl/networks/blacked" to "BLACKED",
-        "$mainUrl/networks/teamskeet-com" to "Team Skeet",
-        "$mainUrl/networks/bangbros" to "Bangbros",
-        "$mainUrl/networks/naughtyamerica-com" to "Naughty America",
+        fun converte(linhas: List<String>, caminho: (String) -> String, rotulo: (String) -> String) =
+            linhas.mapNotNull { linha ->
+                val partes = linha.split("|", limit = 2)
+                if (partes.size < 2) null else "$mainUrl/${caminho(partes[0])}" to rotulo(partes[1])
+            }
 
-        "$mainUrl/categories/jav-uncensored" to "JAV",
-        "$mainUrl/categories/milf" to "MILF",
-        "$mainUrl/categories/big-tits" to "Big Tits",
-        "$mainUrl/categories/big-ass" to "Big Ass",
-        "$mainUrl/categories/blowjob" to "Blowjob",
-        "$mainUrl/categories/anal" to "Anal",
-        "$mainUrl/categories/lesbian" to "Lesbian",
-        "$mainUrl/categories/threesome" to "Threesome",
-        "$mainUrl/categories/latina" to "Latina",
-        "$mainUrl/categories/asian" to "Asian",
-        "$mainUrl/categories/ebony" to "Ebony",
-        "$mainUrl/categories/mature" to "Mature",
-        "$mainUrl/categories/creampie" to "Creampie",
-        "$mainUrl/categories/pov" to "POV"
-        // Qualquer outra categoria funciona pela busca (ex.: "massage", "cosplay", "interracial")
-    )
+        val tags = converte(Listas.tags, { "categories/$it" }, { it })
+        val estudios = converte(Listas.estudios, { it }, { "Studio: $it" })
+        val atrizes = converte(Listas.atrizes, { "models/$it" }, { "Pornstar: $it" })
+
+        return (fixas + tags + estudios + atrizes)
+            .distinctBy { it.first }   // mesma URL só uma vez
+            .distinctBy { it.second }  // mesmo nome de chip só uma vez
+            .toTypedArray()
+    }
+
+    override val mainPage = mainPageOf(*entradasDaHome())
 
     // ---------------------------------------------------------------- constantes / helpers
 

@@ -18,3 +18,13 @@ Adicione este repositório no app:
 - Todas as qualidades disponíveis (2160p/720p/480p...)
 
 Baseado na extensão FreePornVideos de @kerimmkirac.
+
+## Atualizar as listas de filtro (tags, estúdios, atrizes)
+
+Na raiz do repositório, com Python 3 instalado:
+
+```
+python tools/gerar_listas.py --atrizes 400 --estudios 300
+```
+
+Isso reescreve `Listas.kt`. Depois é só commit + push.
