@@ -1,0 +1,43 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/2danie2l/fpv/builds/AllPornStream.cs3",
+        "status": 1,
+        "version": 1,
+        "name": "AllPornStream",
+        "internalName": "AllPornStream",
+        "authors": [
+            "2danie2l"
+        ],
+        "description": "All Porn Stream+ - full-length HD scenes (aggregator of external players)",
+        "fileSize": 31082,
+        "repositoryUrl": "https://github.com/2danie2l/fpv",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://www.google.com/s2/favicons?domain=allpornstream.com&sz=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-ca2bf21ed043b12c3f488539724e116d8a41c3628891f10d77f8265624752204"
+    },
+    {
+        "url": "https://raw.githubusercontent.com/2danie2l/fpv/builds/FreePornVideos.cs3",
+        "status": 1,
+        "version": 21,
+        "name": "FreePornVideos",
+        "internalName": "FreePornVideos",
+        "authors": [
+            "kerimmkirac",
+            "2danie2l"
+        ],
+        "description": "Check out \ud83d\udd25 Full Length Porn Videos from Top Studios in Ultra HD. NO annoying ADS \u2714",
+        "fileSize": 63012,
+        "repositoryUrl": "https://github.com/2danie2l/fpv",
+        "language": "en",
+        "tvTypes": [
+            "NSFW"
+        ],
+        "iconUrl": "https://www.google.com/s2/favicons?domain=www.freepornvideos.xxx&sz=%size%",
+        "apiVersion": 1,
+        "fileHash": "sha256-4a3070f846d2ce2d708acde0783afaaa3b09beae41718ae0a03c111bb5dbe6c0"
+    }
+]
