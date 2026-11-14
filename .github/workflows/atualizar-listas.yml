@@ -1,0 +1,43 @@
+name: Atualizar listas
+
+# Regera o Listas.kt (tags, estúdios, atrizes) toda semana, sobe a versão do plugin e dispara o build.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Gerar Listas.kt
+        run: python tools/gerar_listas.py --atrizes 400 --estudios 300
+
+      - name: Subir versão e fazer commit (só se algo mudou)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- FreePornVideos/src/main/kotlin/com/kerimmkirac/Listas.kt; then
+            echo "Listas sem mudanças."
+            exit 0
+          fi
+          F=FreePornVideos/build.gradle.kts
+          V=$(grep -oP '^version = \K\d+' "$F")
+          sed -i "s/^version = $V/version = $((V+1))/" "$F"
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add -A
+          git commit -m "Atualiza listas (v$((V+1)))"
+          git push
+          # push feito com GITHUB_TOKEN não dispara o build sozinho
+          gh workflow run build.yml

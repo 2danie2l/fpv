@@ -98,6 +98,27 @@ class FreePornVideos : MainAPI() {
     private val cacheFontes = ConcurrentHashMap<String, Pair<Long, List<FonteVideo>>>()
     private val validadeCacheMs = 5 * 60 * 1000L
 
+    // Foto de cada atriz (href da página dela -> URL da foto). A página do vídeo não traz foto, só o nome.
+    private val cacheFotoAtriz = ConcurrentHashMap<String, String>()
+
+    private suspend fun fotoDaAtriz(href: String): String? {
+        cacheFotoAtriz[href]?.let { return it }
+        return try {
+            val doc = limiteRequisicoes.withPermit { app.get(href, timeout = 8).document }
+            val foto = fixUrlNull(doc.selectFirst("meta[property=og:image]")?.attr("content"))
+            if (foto != null) {
+                if (cacheFotoAtriz.size > 300) cacheFotoAtriz.clear()
+                cacheFotoAtriz[href] = foto
+            }
+            foto
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d("FPV", "Sem foto pra $href: ${e.message}")
+            null
+        }
+    }
+
     // Pra cada texto de busca, em quais tipos (models/categories/sites/networks) ele existe de verdade
     private val cacheDireto = ConcurrentHashMap<String, List<String>>()
 
@@ -123,6 +144,24 @@ class FreePornVideos : MainAPI() {
         return null
     }
 
+    // ---------------------------------------------------------------- título: "Site - Atores - Título"
+
+    private val regexDataNoTitulo = Regex("""\s*/\s*\d{1,2}\.\d{1,2}\.\d{4}\s*$""")
+
+    /**
+     * Monta "Site - Ator1 - Ator2 - Título". Tira do título original a data no fim e os nomes do site e dos atores
+     * que já estão no começo, pra não repetir; depois põe o site e todos os atores na ordem em que o site lista.
+     */
+    private fun montaTitulo(tituloOriginal: String, site: String?, atores: List<String>): String {
+        val semData = tituloOriginal.replace(regexDataNoTitulo, "").trim()
+        val nomes = (listOfNotNull(site) + atores).map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
+        val resto = semData.split(" - ").map { it.trim() }
+            .dropWhile { it.lowercase() in nomes }
+            .joinToString(" - ")
+        val partes = listOfNotNull(site?.trim()) + atores + listOf(resto)
+        return partes.filter { it.isNotBlank() }.joinToString(" - ").ifBlank { tituloOriginal }
+    }
+
     // ---------------------------------------------------------------- cards
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -135,10 +174,16 @@ class FreePornVideos : MainAPI() {
                 ?: select("a[href]").firstOrNull { it.attr("href").contains("/videos/") }
                 ?: return null
             val href = fixUrlNull(linkElement.attr("href")?.takeIf { it.isNotBlank() }) ?: return null
-            val title = linkElement.selectFirst("strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            val tituloOriginal = linkElement.selectFirst("strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
                 ?: selectFirst("div.item-info strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
                 ?: linkElement.attr("title").trim().takeIf { it.isNotBlank() }
                 ?: return null
+
+            // Site e atores que o card mostra embaixo do título -> "Site - Ator1 - Ator2 - Título"
+            val siteCard = selectFirst("a.models__item.thumb_cs[href*=/sites/] span")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            val atoresCard = select("a.models__item[href*=/models/]")
+                .map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+            val title = montaTitulo(tituloOriginal, siteCard, atoresCard)
             val poster = posterDe(this, "img.thumb") ?: posterDe(this, "img") ?: return null
 
             // "100%" -> 0..10
@@ -371,7 +416,7 @@ class FreePornVideos : MainAPI() {
         if (cacheFontes.size > 30) cacheFontes.clear()
         cacheFontes[url] = System.currentTimeMillis() to document.fontesDeVideo()
 
-        val title = document.selectFirst("div.headline > h1")?.text()?.trim()
+        val tituloOriginal = document.selectFirst("div.headline > h1")?.text()?.trim()
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
             ?: "Sem título"
 
@@ -390,22 +435,34 @@ class FreePornVideos : MainAPI() {
             .filter { it.isNotBlank() }.distinct()
             .ifEmpty { document.select("a.btn_model").map { it.text().trim() }.filter { it.isNotBlank() }.distinct() }
 
+        // Atrizes com foto (até 6, buscadas em paralelo). Se a foto falhar, fica só o nome.
+        val atoresComFoto = document.select("div.block-details a.btn_model")
+            .ifEmpty { document.select("a.btn_model") }
+            .map { it.text().trim() to it.attr("href") }
+            .filter { it.first.isNotBlank() }
+            .distinctBy { it.first }
+            .take(6)
+            .amap { (nome, href) ->
+                ActorData(Actor(nome, if (href.isNotBlank()) fotoDaAtriz(fixUrl(href)) else null))
+            }
+
         val canal = document.selectFirst("a.btn_sponsor")?.text()?.trim()
         val rede  = document.selectFirst("a.btn_sponsor_group")?.text()?.trim()
 
-        // O site não tem campo de descrição: mostra Canal/Rede/Tags na sinopse
-        val descricaoSite = document.selectXpath("//div[contains(text(), 'Description:')]/em").text().trim()
-        val description = descricaoSite.ifBlank {
-            buildString {
-                if (!canal.isNullOrBlank()) append("Canal: $canal\n")
-                if (!rede.isNullOrBlank()) append("Rede: $rede\n")
-                if (tags.isNotEmpty()) append("Tags: ${tags.joinToString(", ")}")
-            }.trim()
-        }
+        // O Kototoro só exibe "tags" como chips (os atores ficam escondidos), então vão nas tags:
+        // atrizes, depois canal/rede, depois as categorias
+        val tagsComAtrizes = (actors + listOfNotNull(canal, rede) + tags).filter { it.isNotBlank() }.distinct()
+
+        // "Site - Ator1 - Ator2 - Título" (sem a data); o ano vem do título original
+        val title = montaTitulo(tituloOriginal, canal, actors)
+
+        // Só usa a descrição real do site; canal, rede e tags já aparecem como chips
+        val description = document.selectXpath("//div[contains(text(), 'Description:')]/em").text().trim()
+            .ifBlank { null }
 
         val recommendations = document.select("div#list_videos_related_videos_items div.item").mapNotNull { it.toSearchResult() }
 
-        val year = Regex("""\b((?:19|20)\d{2})\s*$""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+        val year = Regex("""\b((?:19|20)\d{2})\s*$""").find(tituloOriginal)?.groupValues?.get(1)?.toIntOrNull()
 
         // Nota = likes / (likes + dislikes) numa escala de 0 a 10
         val likes    = document.selectFirst("a.rate-like + span.count")?.text()?.filter { it.isDigit() }?.toIntOrNull()
@@ -428,11 +485,11 @@ class FreePornVideos : MainAPI() {
             this.posterUrl       = poster
             this.year            = year
             this.plot            = description
-            this.tags            = tags
+            this.tags            = tagsComAtrizes
             this.recommendations = recommendations
             this.score           = Score.from10(rating)
             this.duration        = duration
-            addActors(actors)
+            this.actors          = atoresComFoto
         }
     }
 
