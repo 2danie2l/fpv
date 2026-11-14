@@ -98,27 +98,6 @@ class FreePornVideos : MainAPI() {
     private val cacheFontes = ConcurrentHashMap<String, Pair<Long, List<FonteVideo>>>()
     private val validadeCacheMs = 5 * 60 * 1000L
 
-    // Foto de cada atriz (href da página dela -> URL da foto). A página do vídeo não traz foto, só o nome.
-    private val cacheFotoAtriz = ConcurrentHashMap<String, String>()
-
-    private suspend fun fotoDaAtriz(href: String): String? {
-        cacheFotoAtriz[href]?.let { return it }
-        return try {
-            val doc = limiteRequisicoes.withPermit { app.get(href, timeout = 8).document }
-            val foto = fixUrlNull(doc.selectFirst("meta[property=og:image]")?.attr("content"))
-            if (foto != null) {
-                if (cacheFotoAtriz.size > 300) cacheFotoAtriz.clear()
-                cacheFotoAtriz[href] = foto
-            }
-            foto
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.d("FPV", "Sem foto pra $href: ${e.message}")
-            null
-        }
-    }
-
     // Pra cada texto de busca, em quais tipos (models/categories/sites/networks) ele existe de verdade
     private val cacheDireto = ConcurrentHashMap<String, List<String>>()
 
@@ -435,17 +414,6 @@ class FreePornVideos : MainAPI() {
             .filter { it.isNotBlank() }.distinct()
             .ifEmpty { document.select("a.btn_model").map { it.text().trim() }.filter { it.isNotBlank() }.distinct() }
 
-        // Atrizes com foto (até 6, buscadas em paralelo). Se a foto falhar, fica só o nome.
-        val atoresComFoto = document.select("div.block-details a.btn_model")
-            .ifEmpty { document.select("a.btn_model") }
-            .map { it.text().trim() to it.attr("href") }
-            .filter { it.first.isNotBlank() }
-            .distinctBy { it.first }
-            .take(6)
-            .amap { (nome, href) ->
-                ActorData(Actor(nome, if (href.isNotBlank()) fotoDaAtriz(fixUrl(href)) else null))
-            }
-
         val canal = document.selectFirst("a.btn_sponsor")?.text()?.trim()
         val rede  = document.selectFirst("a.btn_sponsor_group")?.text()?.trim()
 
@@ -489,7 +457,7 @@ class FreePornVideos : MainAPI() {
             this.recommendations = recommendations
             this.score           = Score.from10(rating)
             this.duration        = duration
-            this.actors          = atoresComFoto
+            addActors(actors)
         }
     }
 
