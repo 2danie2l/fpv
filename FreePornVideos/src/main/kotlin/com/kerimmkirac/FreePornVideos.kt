@@ -25,7 +25,8 @@ class FreePornVideos : MainAPI() {
     // Cada entrada vira uma seção da home E um chip de filtro no Kototoro.
     // IMPORTANTE: sem nenhum chip selecionado o Kototoro carrega as seções da home, então
     // esta lista precisa ficar pequena. Tudo que não está aqui continua acessível pela busca
-    // (ver "Busca com filtros" abaixo) e pelas listas "Pornstars" e "Sites".
+    // (ver "Busca com filtros" abaixo). As listas de atrizes e sites ficam fora da home porque o
+    // Kototoro mistura todas as seções e os cards de atriz apareciam no meio dos vídeos.
     private val tagsPopulares = listOf(
         "milf", "big-tits", "big-ass", "blowjob", "anal", "lesbian", "threesome", "latina",
         "asian", "ebony", "mature", "creampie", "pov", "jav-uncensored", "amateur", "hardcore",
@@ -41,10 +42,7 @@ class FreePornVideos : MainAPI() {
     private fun entradasDaHome(): Array<Pair<String, String>> {
         val fixas = listOf(
             "$mainUrl/latest-updates" to "All Videos",
-            "$mainUrl/most-popular/week" to "Most Popular",
-            "$mainUrl/models" to "Pornstars - Most Viewed",
-            "$mainUrl/models/top-rated" to "Pornstars - Top Rated",
-            "$mainUrl/sites" to "Sites"
+            "$mainUrl/most-popular/week" to "Most Popular"
         )
 
         val nomesTags = Listas.tags.mapNotNull { par(it) }.toMap()
@@ -101,19 +99,11 @@ class FreePornVideos : MainAPI() {
     // Pra cada texto de busca, em quais tipos (models/categories/sites/networks) ele existe de verdade
     private val cacheDireto = ConcurrentHashMap<String, List<String>>()
 
-    // Regex compilados uma vez só (antes eram recriados a cada busca/card)
-    private val regexMarcas = Regex("\\p{M}+")
-    private val regexEspacos = Regex("\\s+")
-    private val regexAnoFinal = Regex("""\b((?:19|20)\d{2})\s*$""")
-    private val regexDuracao = Regex("""vjs-duration-display'\)\.html\('([\d:]+)'""")
-    private val regexNumPagina = Regex("""/(\d+)/?$""")
-    private val regexSVideos = Regex("""'s Videos$""")
-
     fun String?.createSlug(): String? {
-        return this?.let { Normalizer.normalize(it, Normalizer.Form.NFD).replace(regexMarcas, "") }
+        return this?.let { Normalizer.normalize(it, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "") }
             ?.filter { it.isWhitespace() || it.isLetterOrDigit() }
             ?.trim()
-            ?.replace(regexEspacos, "-")
+            ?.replace("\\s+".toRegex(), "-")
             ?.lowercase()
     }
 
@@ -131,13 +121,23 @@ class FreePornVideos : MainAPI() {
         return null
     }
 
-    // ---------------------------------------------------------------- título
+    // ---------------------------------------------------------------- título: "Site - Atores - Título"
 
     private val regexDataNoTitulo = Regex("""\s*/\s*\d{1,2}\.\d{1,2}\.\d{4}\s*$""")
 
-    // O site já manda "Canal - Atriz - Atriz2 - Título / 19.01.2024": só tira a data do final, nada mais
-    private fun limpaTitulo(titulo: String): String =
-        titulo.replace(regexDataNoTitulo, "").trim().ifBlank { titulo }
+    /**
+     * Monta "Site - Ator1 - Ator2 - Título". Tira do título original a data no fim e os nomes do site e dos atores
+     * que já estão no começo, pra não repetir; depois põe o site e todos os atores na ordem em que o site lista.
+     */
+    private fun montaTitulo(tituloOriginal: String, site: String?, atores: List<String>): String {
+        val semData = tituloOriginal.replace(regexDataNoTitulo, "").trim()
+        val nomes = (listOfNotNull(site) + atores).map { it.trim().lowercase() }.filter { it.isNotBlank() }.toSet()
+        val resto = semData.split(" - ").map { it.trim() }
+            .dropWhile { it.lowercase() in nomes }
+            .joinToString(" - ")
+        val partes = listOfNotNull(site?.trim()) + atores + listOf(resto)
+        return partes.filter { it.isNotBlank() }.joinToString(" - ").ifBlank { tituloOriginal }
+    }
 
     // ---------------------------------------------------------------- cards
 
@@ -155,7 +155,12 @@ class FreePornVideos : MainAPI() {
                 ?: selectFirst("div.item-info strong.title")?.text()?.trim()?.takeIf { it.isNotBlank() }
                 ?: linkElement.attr("title").trim().takeIf { it.isNotBlank() }
                 ?: return null
-            val title = limpaTitulo(tituloOriginal)
+
+            // Site e atores que o card mostra embaixo do título -> "Site - Ator1 - Ator2 - Título"
+            val siteCard = selectFirst("a.models__item.thumb_cs[href*=/sites/] span")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            val atoresCard = select("a.models__item[href*=/models/]")
+                .map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+            val title = montaTitulo(tituloOriginal, siteCard, atoresCard)
             val poster = posterDe(this, "img.thumb") ?: posterDe(this, "img") ?: return null
 
             // "100%" -> 0..10
@@ -290,7 +295,7 @@ class FreePornVideos : MainAPI() {
     )
 
     private fun String.normalizado(): String =
-        Normalizer.normalize(this, Normalizer.Form.NFD).replace(regexMarcas, "")
+        Normalizer.normalize(this, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "")
             .lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }.trim()
 
     private fun parseFiltro(query: String): Pair<TipoFiltro, String>? {
@@ -303,34 +308,22 @@ class FreePornVideos : MainAPI() {
         return tipo to m.groupValues[2].trim()
     }
 
-    // Listas.kt lido e normalizado UMA vez (antes era refeito a cada busca): caminho, nome e nome normalizado
-    private class EntradaLista(val caminho: String, val nome: String, val norm: String)
-
-    private fun indexa(linhas: List<String>, prefixo: String): List<EntradaLista> =
-        linhas.mapNotNull { par(it) }.map { EntradaLista(prefixo + it.first, it.second, it.second.normalizado()) }
-
-    private val indiceTags by lazy { indexa(Listas.tags, "categories/") }
-    private val indiceEstudios by lazy { indexa(Listas.estudios, "") }
-    private val indiceAtrizes by lazy { indexa(Listas.atrizes, "models/") }
-
-    // Todos os caminhos conhecidos ("models/x", "categories/y", "sites/z", "networks/w") pra busca saber o tipo sem testar
-    private val caminhosConhecidos by lazy {
-        (indiceTags + indiceEstudios + indiceAtrizes).map { it.caminho }.toHashSet()
-    }
-
     // Procura o termo nas listas completas (Listas.kt) e devolve até 3 caminhos ("models/x", "networks/y"...)
     private fun candidatos(tipo: TipoFiltro, termo: String): List<String> {
         val alvo = termo.normalizado()
-        val base = when (tipo) {
-            TipoFiltro.TAG -> indiceTags
-            TipoFiltro.ESTUDIO -> indiceEstudios
-            TipoFiltro.ATRIZ -> indiceAtrizes
+        val base: List<Pair<String, String>> = when (tipo) {
+            TipoFiltro.TAG -> Listas.tags.mapNotNull { par(it) }.map { "categories/${it.first}" to it.second }
+            TipoFiltro.ESTUDIO -> Listas.estudios.mapNotNull { par(it) }
+            TipoFiltro.ATRIZ -> Listas.atrizes.mapNotNull { par(it) }.map { "models/${it.first}" to it.second }
         }
         val achados = base
-            .filter { it.norm.contains(alvo) }
-            .sortedBy { when { it.norm == alvo -> 0; it.norm.startsWith(alvo) -> 1; else -> 2 } }
+            .filter { it.second.normalizado().contains(alvo) }
+            .sortedBy {
+                val n = it.second.normalizado()
+                when { n == alvo -> 0; n.startsWith(alvo) -> 1; else -> 2 }
+            }
             .take(3)
-            .map { it.caminho }
+            .map { it.first }
         if (achados.isNotEmpty()) return achados
 
         // Não está nas listas: tenta o texto como slug direto no site
@@ -360,11 +353,7 @@ class FreePornVideos : MainAPI() {
         // 1) Texto igual ao nome de atriz/categoria/canal/rede -> vídeos dela(e).
         //    Na 1ª página testa os 4 tipos; nas seguintes só os que existiam de verdade.
         val diretas = if (searchquery.isNotBlank()) {
-            // Nome que está no Listas.kt: já sabe o tipo (1 requisição em vez de 4). Desconhecido: testa os 4 como antes.
-            val tipos = cacheDireto[searchquery]
-                ?: listOf("models", "categories", "sites", "networks")
-                    .filter { "$it/$searchquery" in caminhosConhecidos }
-                    .ifEmpty { listOf("models", "categories", "sites", "networks") }
+            val tipos = cacheDireto[searchquery] ?: listOf("models", "categories", "sites", "networks")
             val resultados = tipos.amap { tipo ->
                 tipo to buscaLista("$mainUrl/$tipo/$searchquery/$pagina/", seletorListagem)
             }
@@ -430,8 +419,8 @@ class FreePornVideos : MainAPI() {
         // atrizes, depois canal/rede, depois as categorias
         val tagsComAtrizes = (actors + listOfNotNull(canal, rede) + tags).filter { it.isNotBlank() }.distinct()
 
-        // Título do site sem a data; o ano vem do título original
-        val title = limpaTitulo(tituloOriginal)
+        // "Site - Ator1 - Ator2 - Título" (sem a data); o ano vem do título original
+        val title = montaTitulo(tituloOriginal, canal, actors)
 
         // Só usa a descrição real do site; canal, rede e tags já aparecem como chips
         val description = document.selectXpath("//div[contains(text(), 'Description:')]/em").text().trim()
@@ -439,7 +428,7 @@ class FreePornVideos : MainAPI() {
 
         val recommendations = document.select("div#list_videos_related_videos_items div.item").mapNotNull { it.toSearchResult() }
 
-        val year = regexAnoFinal.find(tituloOriginal)?.groupValues?.get(1)?.toIntOrNull()
+        val year = Regex("""\b((?:19|20)\d{2})\s*$""").find(tituloOriginal)?.groupValues?.get(1)?.toIntOrNull()
 
         // Nota = likes / (likes + dislikes) numa escala de 0 a 10
         val likes    = document.selectFirst("a.rate-like + span.count")?.text()?.filter { it.isDigit() }?.toIntOrNull()
@@ -448,7 +437,7 @@ class FreePornVideos : MainAPI() {
             (likes * 10f / (likes + dislikes)).toString() else null
 
         // Duração está num script: $('.vjs-duration-display').html('46:30')
-        val rawDuration = regexDuracao.find(response.text)?.groupValues?.get(1)
+        val rawDuration = Regex("""vjs-duration-display'\)\.html\('([\d:]+)'""").find(response.text)?.groupValues?.get(1)
             ?: document.selectXpath("//span[contains(text(), 'Duration')]/em").text().trim()
         val partes = rawDuration.split(":").mapNotNull { it.trim().toIntOrNull() }
         val duration = when (partes.size) {
@@ -476,14 +465,14 @@ class FreePornVideos : MainAPI() {
         val primeira = app.get("$base/").document
 
         val titulo = primeira.selectFirst("div.headline h1")?.text()?.trim()
-            ?.replace(regexSVideos, "")?.trim()
+            ?.replace(Regex("""'s Videos$"""), "")?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: primeira.selectFirst("meta[property=og:title]")?.attr("content")?.trim()
             ?: base.substringAfterLast('/').replace('-', ' ')
 
         // Maior número de página que aparece na paginação (o botão "Last" já aponta pra ela)
         val totalPaginas = primeira.select(".pagination a[href]")
-            .mapNotNull { regexNumPagina.find(it.attr("href"))?.groupValues?.get(1)?.toIntOrNull() }
+            .mapNotNull { Regex("""/(\d+)/?$""").find(it.attr("href"))?.groupValues?.get(1)?.toIntOrNull() }
             .maxOrNull() ?: 1
         val paginasLidas = minOf(totalPaginas, maxPaginasColecao)
 

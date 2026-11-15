@@ -12,7 +12,7 @@ Adicione este repositório no app:
 
 ## Recursos
 
-- Chips de filtro: tags populares (`Tag: ...`) e principais redes (`Studio: ...`), mais as listas Pornstars e Sites
+- Chips de filtro: tags populares (`Tag: ...`) e principais redes (`Studio: ...`)
 - Busca com filtros (digite na busca):
   - `tag: milf`
   - `studio: brazzers`
