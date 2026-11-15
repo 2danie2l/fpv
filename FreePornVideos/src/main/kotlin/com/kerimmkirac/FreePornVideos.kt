@@ -99,6 +99,21 @@ class FreePornVideos : MainAPI() {
     // Pra cada texto de busca, em quais tipos (models/categories/sites/networks) ele existe de verdade
     private val cacheDireto = ConcurrentHashMap<String, List<String>>()
 
+    // Slugs conhecidos de cada tipo, montados 1 vez a partir do Listas.kt. Se o texto da busca bate
+    // exatamente com um deles, só esse tipo é consultado (em vez de testar os 4 no site).
+    private val slugsPorTipo: Map<String, Set<String>> by lazy {
+        val estudios = Listas.estudios.mapNotNull { par(it)?.first }
+        mapOf(
+            "models" to Listas.atrizes.mapNotNull { par(it)?.first }.toSet(),
+            "categories" to Listas.tags.mapNotNull { par(it)?.first }.toSet(),
+            "sites" to estudios.filter { it.startsWith("sites/") }.map { it.removePrefix("sites/") }.toSet(),
+            "networks" to estudios.filter { it.startsWith("networks/") }.map { it.removePrefix("networks/") }.toSet()
+        )
+    }
+
+    private fun tiposConhecidos(slug: String): List<String> =
+        slugsPorTipo.filterValues { slug in it }.keys.toList()
+
     fun String?.createSlug(): String? {
         return this?.let { Normalizer.normalize(it, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "") }
             ?.filter { it.isWhitespace() || it.isLetterOrDigit() }
@@ -308,18 +323,23 @@ class FreePornVideos : MainAPI() {
         return tipo to m.groupValues[2].trim()
     }
 
+    // Listas já com o nome normalizado (caminho -> nome sem acento/minúsculo), montadas 1 vez
+    private val baseFiltros: Map<TipoFiltro, List<Pair<String, String>>> by lazy {
+        mapOf(
+            TipoFiltro.TAG to Listas.tags.mapNotNull { par(it) }.map { "categories/${it.first}" to it.second.normalizado() },
+            TipoFiltro.ESTUDIO to Listas.estudios.mapNotNull { par(it) }.map { it.first to it.second.normalizado() },
+            TipoFiltro.ATRIZ to Listas.atrizes.mapNotNull { par(it) }.map { "models/${it.first}" to it.second.normalizado() }
+        )
+    }
+
     // Procura o termo nas listas completas (Listas.kt) e devolve até 3 caminhos ("models/x", "networks/y"...)
     private fun candidatos(tipo: TipoFiltro, termo: String): List<String> {
         val alvo = termo.normalizado()
-        val base: List<Pair<String, String>> = when (tipo) {
-            TipoFiltro.TAG -> Listas.tags.mapNotNull { par(it) }.map { "categories/${it.first}" to it.second }
-            TipoFiltro.ESTUDIO -> Listas.estudios.mapNotNull { par(it) }
-            TipoFiltro.ATRIZ -> Listas.atrizes.mapNotNull { par(it) }.map { "models/${it.first}" to it.second }
-        }
+        val base = baseFiltros.getValue(tipo)
         val achados = base
-            .filter { it.second.normalizado().contains(alvo) }
+            .filter { it.second.contains(alvo) }
             .sortedBy {
-                val n = it.second.normalizado()
+                val n = it.second
                 when { n == alvo -> 0; n.startsWith(alvo) -> 1; else -> 2 }
             }
             .take(3)
@@ -353,7 +373,8 @@ class FreePornVideos : MainAPI() {
         // 1) Texto igual ao nome de atriz/categoria/canal/rede -> vídeos dela(e).
         //    Na 1ª página testa os 4 tipos; nas seguintes só os que existiam de verdade.
         val diretas = if (searchquery.isNotBlank()) {
-            val tipos = cacheDireto[searchquery] ?: listOf("models", "categories", "sites", "networks")
+            val tipos = cacheDireto[searchquery]
+                ?: tiposConhecidos(searchquery).ifEmpty { listOf("models", "categories", "sites", "networks") }
             val resultados = tipos.amap { tipo ->
                 tipo to buscaLista("$mainUrl/$tipo/$searchquery/$pagina/", seletorListagem)
             }
