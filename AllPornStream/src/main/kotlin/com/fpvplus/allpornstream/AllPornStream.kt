@@ -404,7 +404,8 @@ class AllPornStream : MainAPI() {
         val tags = (post.atores + listOfNotNull(post.estudio) + post.categorias.take(15).map { capitaliza(it) })
             .filter { it.isNotBlank() }.distinct()
 
-        val data = post.data?.take(10)?.takeIf { it.length == 10 }
+        // O Next.js manda datas como "$D2026-09-19T..." (prefixo $D): tira o prefixo antes de cortar
+        val data = post.data?.removePrefix("\$D")?.take(10)?.takeIf { it.length == 10 && it[4] == '-' && it[7] == '-' }
         val year = data?.take(4)?.toIntOrNull()
         val plot = listOfNotNull(
             diag,
