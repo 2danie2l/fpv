@@ -53,6 +53,9 @@ class AllPornStream : MainAPI() {
         val fontes: Fontes
     )
 
+    // true = mostra o tempo de carregamento no começo da sinopse (teste de lentidão)
+    private val diagnostico = true
+
     // Só 3 requisições por vez (evita "connection abort" quando o Kototoro pede várias seções juntas)
     private val limiteRequisicoes = Semaphore(3)
 
@@ -288,13 +291,13 @@ class AllPornStream : MainAPI() {
         val sb = StringBuilder(html.length / 4)
         var i = 0
         while (true) {
-            val a = html.indexOf("<script", i, ignoreCase = true)
+            val a = html.indexOf("<script", i)
             if (a < 0) {
                 sb.append(html, i, html.length)
                 break
             }
             sb.append(html, i, a)
-            val b = html.indexOf("</script>", a, ignoreCase = true)
+            val b = html.indexOf("</script>", a)
             if (b < 0) break
             i = b + 9
         }
@@ -377,9 +380,14 @@ class AllPornStream : MainAPI() {
         s.trim().split(" ").filter { it.isNotBlank() }.joinToString(" ") { p -> p.replaceFirstChar { it.uppercase() } }
 
     override suspend fun load(url: String): LoadResponse {
+        val t0 = System.currentTimeMillis()
         val html = app.get(url).text
+        val t1 = System.currentTimeMillis()
         val document = Jsoup.parse(semScripts(html), url)
         val post = lePost(html)
+        val t2 = System.currentTimeMillis()
+        // DIAGNÓSTICO TEMPORÁRIO: aparece no começo da sinopse. Quando terminar o teste, trocar por false.
+        val diag = if (diagnostico) "Tempo: baixar a página ${t1 - t0} ms (${html.length / 1024} KB) | ler os dados ${t2 - t1} ms" else null
 
         if (cacheFontes.size > 30) cacheFontes.clear()
         cacheFontes[url] = System.currentTimeMillis() to post.fontes
@@ -399,6 +407,7 @@ class AllPornStream : MainAPI() {
         val data = post.data?.take(10)?.takeIf { it.length == 10 }
         val year = data?.take(4)?.toIntOrNull()
         val plot = listOfNotNull(
+            diag,
             data?.let { "Published: $it" },
             post.descricao
         ).joinToString("\n\n").ifBlank { null }
