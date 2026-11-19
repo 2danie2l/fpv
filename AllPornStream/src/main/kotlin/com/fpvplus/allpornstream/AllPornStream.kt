@@ -4,6 +4,7 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -261,9 +262,43 @@ class AllPornStream : MainAPI() {
     }
 
     // Junta todos os pedaços self.__next_f.push([1,"..."]) num texto só (um objeto pode vir dividido em vários)
+    // Otimização: só desescapa a partir do pedaço que tem "initialPost" (a página tem ~1,8 MB, quase tudo é
+    // dado de outros vídeos) e para depois de ~300 KB.
     private fun juntaFluxo(html: String): String {
+        val sb = StringBuilder()
+        var achou = false
+        for (m in regexPush.findAll(html)) {
+            val bruto = m.groupValues[1]
+            if (!achou) {
+                if (!bruto.contains("initialPost")) continue
+                achou = true
+            }
+            sb.append(bruto.desescapa())
+            if (sb.length > 300_000) break
+        }
+        if (sb.isNotEmpty()) return sb.toString()
+
+        // Reserva: método completo
         val partes = regexPush.findAll(html).map { it.groupValues[1].desescapa() }.toList()
         return if (partes.isEmpty()) html.replace("\\\"", "\"") else partes.joinToString("")
+    }
+
+    // Tira os <script> do HTML antes do Jsoup (eles são quase toda a página e não servem pra ler o resto)
+    private fun semScripts(html: String): String {
+        val sb = StringBuilder(html.length / 4)
+        var i = 0
+        while (true) {
+            val a = html.indexOf("<script", i, ignoreCase = true)
+            if (a < 0) {
+                sb.append(html, i, html.length)
+                break
+            }
+            sb.append(html, i, a)
+            val b = html.indexOf("</script>", a, ignoreCase = true)
+            if (b < 0) break
+            i = b + 9
+        }
+        return sb.toString()
     }
 
     private fun String.campoTexto(chave: String): String? =
@@ -342,9 +377,9 @@ class AllPornStream : MainAPI() {
         s.trim().split(" ").filter { it.isNotBlank() }.joinToString(" ") { p -> p.replaceFirstChar { it.uppercase() } }
 
     override suspend fun load(url: String): LoadResponse {
-        val response = app.get(url)
-        val document = response.document
-        val post = lePost(response.text)
+        val html = app.get(url).text
+        val document = Jsoup.parse(semScripts(html), url)
+        val post = lePost(html)
 
         if (cacheFontes.size > 30) cacheFontes.clear()
         cacheFontes[url] = System.currentTimeMillis() to post.fontes
@@ -371,8 +406,7 @@ class AllPornStream : MainAPI() {
         // Duração em minutos; se vier null, tenta o JSON-LD (PT27M8S)
         var segundos = post.duracaoSeg
         if (segundos == null) {
-            val ld = document.select("script[type=application/ld+json]").joinToString(" ") { it.data() }
-            val md = Regex("\"duration\"\\s*:\\s*\"PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?\"").find(ld)
+            val md = Regex("\"duration\"\\s*:\\s*\"PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?\"").find(html)
             if (md != null) {
                 segundos = (md.groupValues[1].toIntOrNull() ?: 0) * 3600 +
                     (md.groupValues[2].toIntOrNull() ?: 0) * 60 +
@@ -394,6 +428,7 @@ class AllPornStream : MainAPI() {
                 .mapNotNull { it.toSearchResult() }
                 .filter { it.url != url }
                 .distinctBy { it.url }
+                .take(12)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
